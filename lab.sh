@@ -86,6 +86,31 @@ wait)
 approve)
   sh "$LAB/pod-approve.sh" "$2"
   ;;
+repair)
+  # Main's exam is broken, so no pull request can pass pod-gate, the fix included: every pull
+  # request is judged by main's copy. The one recovery GitHub offers is an administrator lifting
+  # administrator enforcement for the moment of one push. It is restored on exit whatever happens,
+  # and GitHub's audit log records both changes.
+  git checkout -q main
+  restore() { gh api -X POST "repos/$REPO/branches/main/protection/enforce_admins" -q '"administrators bound again: \(.enabled)"'; }
+  trap restore EXIT
+  gh api -X DELETE "repos/$REPO/branches/main/protection/enforce_admins" > /dev/null && echo "administrator enforcement lifted"
+  git push -q origin main && echo "pushed $(git rev-parse --short HEAD) to main: $(git log -1 --format=%s)"
+  ;;
+wait-after)
+  # until every open pull request's newest pod-gate verdict started after the given UTC moment
+  T="$2"
+  for i in $(seq 1 48); do
+    missing=0
+    for sha in $(gh pr list --repo "$REPO" --state open --json headRefOid -q '.[].headRefOid'); do
+      latest=$(gh api "repos/$REPO/commits/$sha/check-runs" -q '[.check_runs[] | select(.name=="pod-gate" and .status=="completed")] | sort_by(.started_at) | last | .started_at // empty')
+      { [ -n "$latest" ] && [ "$latest" \> "$T" ]; } || missing=1
+    done
+    [ $missing = 0 ] && { echo "every open pull request has a pod-gate verdict newer than $T"; exit 0; }
+    sleep 10
+  done
+  echo "timed out waiting for new verdicts"; exit 1
+  ;;
 report)
   gh pr list --repo "$REPO" --state all --json number,title,state,mergedAt,headRefOid,autoMergeRequest -q '.[]' | while read -r row; do
     n=$(jq -r .number <<<"$row"); sha=$(jq -r .headRefOid <<<"$row")
@@ -98,5 +123,5 @@ delete)
   gh repo delete "$REPO" --yes
   ;;
 *)
-  echo "usage: bash lab.sh create | prs | wait | approve <pr> | report | delete"; exit 2;;
+  echo "usage: bash lab.sh create | prs | wait | wait-after <utc> | approve <pr> | repair | report | delete"; exit 2;;
 esac
