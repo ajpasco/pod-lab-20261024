@@ -8,3 +8,5 @@ Disposable. Safe to delete. Proves the GitHub shape for pod in one afternoon:
 4. `pod-approve.sh` from a terminal sets the same status the console button will.
 
 Nothing here is a product. The names are placeholders.
+
+Edited by a story that may only touch app/.
