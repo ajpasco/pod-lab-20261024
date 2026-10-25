@@ -14,14 +14,15 @@ lines=(); fail=0
 is_protected() { case "$1" in eval/*|.github/*|docs/*|package.json) return 0;; *) return 1;; esac; }
 
 # 1. Scope. A story pull request (branch story/<n>) may change only what eval/stories/<n>.txt on
-#    main allows. Any other pull request may change only protected paths.
+#    main allows, plus .pod/story-<n>/ for its builder's handoff note. Any other pull request may
+#    change only protected paths.
 story=$(sed -n 's#^story/\([0-9][0-9]*\).*#\1#p' <<<"$HEAD_REF")
 if [ -n "$story" ]; then
   scope_file="$ENFORCER/eval/stories/$story.txt"
   if [ ! -f "$scope_file" ]; then
     lines+=("scope: story $story has no scope file on main"); fail=1
   else
-    mapfile -t GLOBS < "$scope_file"; bad=0
+    mapfile -t GLOBS < "$scope_file"; GLOBS+=(".pod/story-$story/*"); bad=0
     for p in "${CHANGED[@]}"; do
       ok=0; for g in "${GLOBS[@]}"; do [ -z "$g" ] && continue; case "$p" in $g) ok=1;; esac; done
       [ $ok = 1 ] || { lines+=("scope: $p is outside story $story's scope (${GLOBS[*]})"); bad=1; }
@@ -43,14 +44,17 @@ if [ $needs = 1 ]; then
   if [ "$state" = "success" ]; then
     lines+=("approval: pod/approval is success on $HEAD_SHA")
   else
-    lines+=("approval: waiting for the founder. This pull request changes a protected path and commit $HEAD_SHA carries no pod/approval status. The founder runs: pod-approve.sh $PR"); fail=1
+    lines+=("approval: waiting for the founder. This pull request changes a protected path and commit $HEAD_SHA carries no pod/approval status. The founder runs: pod-works approve $PR"); fail=1
   fi
 fi
 
-# 3. The eval, from main's copy, against the pull request's app/. The pull request's code runs
-#    with no token in its environment, so it cannot write a check run for itself.
+# 3. The acceptance tests, main's copy of eval/, against the pull request's app/. The pull
+#    request's code runs with no token in its environment, so it cannot write a check run for
+#    itself.
 WORK=$(mktemp -d)
-cp -R "$ENFORCER/eval" "$WORK/eval"; cp "$ENFORCER/package.json" "$WORK/"; cp -R "$SUBJECT/app" "$WORK/app"
+cp -R "$ENFORCER/eval" "$WORK/eval"
+for f in package.json package-lock.json; do [ -f "$ENFORCER/$f" ] && cp "$ENFORCER/$f" "$WORK/"; done
+if [ -d "$SUBJECT/app" ]; then cp -R "$SUBJECT/app" "$WORK/app"; else mkdir -p "$WORK/app"; fi
 if (cd "$WORK" && env -u GH_TOKEN -u GITHUB_TOKEN sh eval/run.sh) > "$WORK/eval.log" 2>&1; then
   lines+=("eval: main's eval passes against this pull request's app/")
 else

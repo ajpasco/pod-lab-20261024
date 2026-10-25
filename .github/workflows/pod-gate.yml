@@ -48,6 +48,10 @@ jobs:
           path: subject
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-python@v5
+        if: steps.pr.outputs.skip != '1'
+        with:
+          python-version: '3.12'
       - name: pod-gate
         if: steps.pr.outputs.skip != '1'
         env:
