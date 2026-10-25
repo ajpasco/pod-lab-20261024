@@ -1,0 +1,17 @@
+# Names no file under app/ may contain, for the conventions step (eval/conventions.sh). Read-only to
+# every builder.
+#
+# One POSIX extended regular expression per line; lines starting with # and blank lines are
+# ignored. A match in any file under app/ fails the conventions step. The list names the acceptance
+# tests' runner, their reporter and the path their reports are written to, so that no file of the
+# builder's can address them: a build that can reach its own report can write a passing one.
+#
+# The sample names what its own eval/ uses. A real stack adds the names of its runners (vitest,
+# pytest, playwright, as its eval plan names them), its reporters, and the path its reports are
+# written to. The list is read from eval/, so nothing under app/ can change it.
+
+# The sample runner, imported by eval/test.js.
+node:test
+--test-reporter
+# The acceptance tests' folder, named from app/: matches eval/ and ../eval/, not retrieval/.
+(^|[^A-Za-z0-9_.-])eval/
