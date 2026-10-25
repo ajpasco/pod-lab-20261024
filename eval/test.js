@@ -7,3 +7,5 @@ test('T-001 add returns the sum', () => {
 });
 
 // E. A change to the exam that the founder approves with pod approve; the lab proof that approval arms auto-merge.
+
+// F. Two defect records ride with this change, for the approval console's end-to-end test.
