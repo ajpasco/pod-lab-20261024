@@ -50,17 +50,23 @@ fi
 
 # 3. The acceptance tests, main's copy of eval/, against the pull request's app/. The pull
 #    request's code runs with no token in its environment, so it cannot write a check run for
-#    itself.
-WORK=$(mktemp -d)
-cp -R "$ENFORCER/eval" "$WORK/eval"
-for f in package.json package-lock.json; do [ -f "$ENFORCER/$f" ] && cp "$ENFORCER/$f" "$WORK/"; done
-if [ -d "$SUBJECT/app" ]; then cp -R "$SUBJECT/app" "$WORK/app"; else mkdir -p "$WORK/app"; fi
-if (cd "$WORK" && env -u GH_TOKEN -u GITHUB_TOKEN sh eval/run.sh) > "$WORK/eval.log" 2>&1; then
-  lines+=("eval: main's eval passes against this pull request's app/")
+#    itself. A main with no eval/ at all is a project before its freeze: the pull request that
+#    brings the tests is judged on scope and approval alone, and no story can pass meanwhile,
+#    because its scope file lives under eval/ too.
+if [ ! -d "$ENFORCER/eval" ]; then
+  lines+=("eval: main has no eval/ yet, so there is nothing to run; the pull request that brings the acceptance tests is judged on scope and approval")
 else
-  lines+=("eval: main's eval FAILS against this pull request's app/"); fail=1
+  WORK=$(mktemp -d)
+  cp -R "$ENFORCER/eval" "$WORK/eval"
+  for f in package.json package-lock.json; do [ -f "$ENFORCER/$f" ] && cp "$ENFORCER/$f" "$WORK/"; done
+  if [ -d "$SUBJECT/app" ]; then cp -R "$SUBJECT/app" "$WORK/app"; else mkdir -p "$WORK/app"; fi
+  if (cd "$WORK" && env -u GH_TOKEN -u GITHUB_TOKEN sh eval/run.sh) > "$WORK/eval.log" 2>&1; then
+    lines+=("eval: main's eval passes against this pull request's app/")
+  else
+    lines+=("eval: main's eval FAILS against this pull request's app/"); fail=1
+  fi
+  echo "--- eval log (tail)"; tail -n 25 "$WORK/eval.log"; echo "---"
 fi
-echo "--- eval log (tail)"; tail -n 25 "$WORK/eval.log"; echo "---"
 
 # 4. The verdict, as a check run on the head commit, written by the Actions app.
 if [ $fail = 0 ]; then conclusion=success; else conclusion=failure; fi

@@ -1,11 +1,14 @@
 name: pod-preview
 # Started by a person with write access, never by a pull request: pod-works preview <pr>
 # dispatches it on main. workflow_dispatch runs the workflow file from the ref it is dispatched
-# on, so this file and preview.sh are always main's copies; the pull request's own .github/ never
+# on, so this file and its scripts are always main's copies; the pull request's own .github/ never
 # runs. It runs the pull request's acceptance tests against main's app/ and writes nothing to
 # GitHub: the result is this job's conclusion and its log, and pod-works records it as a
 # pod/preview status with the founder's own login. Information before approving, not a condition
 # of the gate.
+# Two jobs, as in the gate. `prepare` finds the pull request and reads the pull request's own
+# eval/runtime with main's script, since the tests being run are the pull request's;
+# `preview-runner` runs on that machine with the setup steps it names.
 on:
   workflow_dispatch:
     inputs:
@@ -15,11 +18,19 @@ on:
         required: true
 permissions: {}
 jobs:
-  preview-runner:
+  prepare:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      sha: ${{ steps.pr.outputs.sha }}
+      runner: ${{ steps.runtime.outputs.runner }}
+      node: ${{ steps.runtime.outputs.node }}
+      python: ${{ steps.runtime.outputs.python }}
+      java: ${{ steps.runtime.outputs.java }}
+      android: ${{ steps.runtime.outputs.android }}
     steps:
       - name: find the pull request
         id: pr
@@ -31,8 +42,29 @@ jobs:
           state=$(gh pr view "$PR_INPUT" --repo "$GITHUB_REPOSITORY" --json state -q .state)
           if [ "$state" != "OPEN" ]; then echo "pod-preview: #$PR_INPUT is $state; only an open pull request is previewed"; exit 1; fi
           sha=$(gh pr view "$PR_INPUT" --repo "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)
-          ref=$(gh pr view "$PR_INPUT" --repo "$GITHUB_REPOSITORY" --json headRefName -q .headRefName)
-          echo "number=$PR_INPUT" >> "$GITHUB_OUTPUT"; echo "sha=$sha" >> "$GITHUB_OUTPUT"; echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "number=$PR_INPUT" >> "$GITHUB_OUTPUT"; echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: enforcer
+          persist-credentials: false
+          sparse-checkout: .github
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          path: subject
+          persist-credentials: false
+          sparse-checkout: eval
+      - name: read the pull request's eval/runtime
+        id: runtime
+        run: bash enforcer/.github/scripts/runtime.sh subject/eval/runtime >> "$GITHUB_OUTPUT"
+  preview-runner:
+    needs: prepare
+    runs-on: ${{ needs.prepare.outputs.runner || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -40,14 +72,30 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.pr.outputs.sha }}
+          ref: ${{ needs.prepare.outputs.sha }}
           path: subject
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
+        if: needs.prepare.outputs.node != ''
         with:
-          python-version: '3.12'
+          node-version: ${{ needs.prepare.outputs.node }}
+      - uses: actions/setup-python@v5
+        if: needs.prepare.outputs.python != ''
+        with:
+          python-version: ${{ needs.prepare.outputs.python }}
+      - uses: actions/setup-java@v4
+        if: needs.prepare.outputs.java != ''
+        with:
+          distribution: temurin
+          java-version: ${{ needs.prepare.outputs.java }}
+      - name: kvm for the android emulator
+        if: needs.prepare.outputs.android == '1'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: pod-preview
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash enforcer/.github/scripts/preview.sh "${{ steps.pr.outputs.number }}" "$GITHUB_WORKSPACE/enforcer" "$GITHUB_WORKSPACE/subject"
+        run: bash enforcer/.github/scripts/preview.sh "${{ needs.prepare.outputs.number }}" "$GITHUB_WORKSPACE/enforcer" "$GITHUB_WORKSPACE/subject"

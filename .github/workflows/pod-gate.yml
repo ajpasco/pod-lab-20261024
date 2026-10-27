@@ -2,19 +2,29 @@ name: pod-gate
 # Defined on main and run from main's copy, whatever the pull request carries. Two triggers:
 # the pull request itself, and a commit status named pod/approval landing on its head commit,
 # so the founder's click re-judges the pull request without anyone re-running anything.
+# Two jobs. `prepare` finds the pull request and reads main's eval/runtime, the acceptance tests'
+# own declaration of what their machine needs. `gate-runner` runs on that machine, with only the
+# setup steps the declaration names, and judges. The workflow chooses no language of its own.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
   status: {}
 permissions: {}
 jobs:
-  gate-runner:
+  prepare:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
-      checks: write
-      statuses: read
+    outputs:
+      skip: ${{ steps.pr.outputs.skip }}
+      number: ${{ steps.pr.outputs.number }}
+      sha: ${{ steps.pr.outputs.sha }}
+      runner: ${{ steps.runtime.outputs.runner }}
+      node: ${{ steps.runtime.outputs.node }}
+      python: ${{ steps.runtime.outputs.python }}
+      java: ${{ steps.runtime.outputs.java }}
+      android: ${{ steps.runtime.outputs.android }}
     steps:
       - name: find the pull request
         id: pr
@@ -39,21 +49,55 @@ jobs:
         if: steps.pr.outputs.skip != '1'
         with:
           ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            eval
+            .github
+      - name: read main's eval/runtime
+        id: runtime
+        if: steps.pr.outputs.skip != '1'
+        run: bash .github/scripts/runtime.sh eval/runtime >> "$GITHUB_OUTPUT"
+  gate-runner:
+    needs: prepare
+    if: needs.prepare.outputs.skip != '1'
+    runs-on: ${{ needs.prepare.outputs.runner || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+      statuses: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
           path: enforcer
           persist-credentials: false
       - uses: actions/checkout@v4
-        if: steps.pr.outputs.skip != '1'
         with:
-          ref: ${{ steps.pr.outputs.sha }}
+          ref: ${{ needs.prepare.outputs.sha }}
           path: subject
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
-        if: steps.pr.outputs.skip != '1'
+      - uses: actions/setup-node@v4
+        if: needs.prepare.outputs.node != ''
         with:
-          python-version: '3.12'
+          node-version: ${{ needs.prepare.outputs.node }}
+      - uses: actions/setup-python@v5
+        if: needs.prepare.outputs.python != ''
+        with:
+          python-version: ${{ needs.prepare.outputs.python }}
+      - uses: actions/setup-java@v4
+        if: needs.prepare.outputs.java != ''
+        with:
+          distribution: temurin
+          java-version: ${{ needs.prepare.outputs.java }}
+      - name: kvm for the android emulator
+        if: needs.prepare.outputs.android == '1'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: pod-gate
-        if: steps.pr.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash enforcer/.github/scripts/gate.sh "${{ steps.pr.outputs.number }}" "$GITHUB_WORKSPACE/enforcer" "$GITHUB_WORKSPACE/subject"
+        run: bash enforcer/.github/scripts/gate.sh "${{ needs.prepare.outputs.number }}" "$GITHUB_WORKSPACE/enforcer" "$GITHUB_WORKSPACE/subject"
