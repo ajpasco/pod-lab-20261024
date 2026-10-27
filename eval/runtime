@@ -1,1 +1,2 @@
-node 22
+# What the acceptance tests need from the gate's machine; read by .github/scripts/runtime.sh.
+node 22   # the tests run with node --test
